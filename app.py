@@ -1,6 +1,6 @@
 # app.py
 # This script creates a Streamlit web application to automate the generation of athlete profile images.
-# It now includes a more advanced simulated face cropping logic, a preview section, and an optional guideline overlay.
+# This version features improved cropping logic and a more visible guideline overlay.
 
 import streamlit as st
 from PIL import Image, ImageDraw
@@ -28,10 +28,28 @@ OUTPUT_SPECS = {
 
 # --- Core Image Processing Logic (Simulated) ---
 
-def simulate_crop(image, target_width, target_height):
+def simulate_avatar_crop(image):
     """
-    Simulates a more intelligent crop that focuses on the center-top of the image,
-    more appropriate for a human subject.
+    Simulates a head-and-shoulders crop for an avatar,
+    focusing on the top center of the image.
+    """
+    img_width, img_height = image.size
+    
+    # Calculate crop box for a head-and-shoulders shot
+    # This is a heuristic and would be replaced by a real face detection model
+    crop_width = int(img_width * 0.8) # Crop to 80% of the image width
+    crop_height = int(img_height * 0.6) # Crop to 60% of the image height, from the top
+    
+    left = (img_width - crop_width) / 2
+    top = 0
+    right = left + crop_width
+    bottom = top + crop_height
+    
+    return image.crop((left, top, right, bottom))
+
+def simulate_hero_crop(image, target_width, target_height):
+    """
+    Simulates a hero crop, focusing on a wider shot with a specific aspect ratio.
     """
     img_width, img_height = image.size
     target_aspect = target_width / target_height
@@ -56,28 +74,28 @@ def simulate_crop(image, target_width, target_height):
     else:
         cropped_image = image
 
-    return cropped_image.resize((target_width, target_height), Image.LANCZOS)
+    return cropped_image
 
 def create_guideline_image(width, height):
     """Generates a transparent guideline image with a dashed border."""
     guideline = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(guideline)
-    # Draw a thin, white dashed border
-    for i in range(0, width, 10):
-        draw.line((i, 0, i+5, 0), fill=(255, 255, 255, 200), width=1)
-        draw.line((i, height-1, i+5, height-1), fill=(255, 255, 255, 200), width=1)
-    for i in range(0, height, 10):
-        draw.line((0, i, 0, i+5), fill=(255, 255, 255, 200), width=1)
-        draw.line((width-1, i, width-1, i+5), fill=(255, 255, 255, 200), width=1)
+    # Draw a thicker, white dashed border for visibility
+    for i in range(0, width, 20):
+        draw.line((i, 0, i+10, 0), fill=(255, 255, 255, 255), width=3)
+        draw.line((i, height-1, i+10, height-1), fill=(255, 255, 255, 255), width=3)
+    for i in range(0, height, 20):
+        draw.line((0, i, 0, i+10), fill=(255, 255, 255, 255), width=3)
+        draw.line((width-1, i, width-1, i+10), fill=(255, 255, 255, 255), width=3)
     return guideline
 
 def create_hero_guideline_image(width, height):
     """Generates a guideline for hero images with a centered horizontal line."""
     guideline = create_guideline_image(width, height)
     draw = ImageDraw.Draw(guideline)
-    # Add a horizontal line for the shoulders based on reference
-    shoulder_height = int(height * 0.4) # Adjusting based on reference image proportions
-    draw.line((0, shoulder_height, width, shoulder_height), fill=(255, 255, 255, 150), width=3)
+    # Add a prominent horizontal line for the shoulders based on reference
+    shoulder_height = int(height * 0.4) 
+    draw.line((0, shoulder_height, width, shoulder_height), fill=(255, 255, 255, 200), width=5)
     return guideline
 
 def process_image(uploaded_file, size_spec, add_guideline=False):
@@ -88,18 +106,20 @@ def process_image(uploaded_file, size_spec, add_guideline=False):
     try:
         # Open the image using Pillow (PIL)
         image = Image.open(uploaded_file)
-        
-        # Ensure image is in RGBA format for transparency
         image = image.convert("RGBA")
 
-        # Get the original filename without the suffix
         original_filename, _ = os.path.splitext(uploaded_file.name)
-
         width = size_spec["width"]
         height = size_spec["height"]
         
-        # Apply the new simulated cropping logic
-        processed_image = simulate_crop(image, width, height)
+        # Select the correct cropping function based on the type
+        if size_spec["type"] == "avatar":
+            cropped_image = simulate_avatar_crop(image)
+        else: # "hero"
+            cropped_image = simulate_hero_crop(image, width, height)
+
+        # Resize the cropped image to the final dimensions
+        processed_image = cropped_image.resize((width, height), Image.LANCZOS)
 
         # Create a new image with a transparent background
         bg = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -222,7 +242,6 @@ def main():
                             zip_buffer = io.BytesIO()
                             with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zf:
                                 for img in all_generated_images:
-                                    # We save the original processed image to the zip, not the one with the guideline
                                     zf.writestr(img["name"], img["data"].getvalue())
 
                             st.success("Images generated successfully! Download the ZIP below.")
@@ -241,7 +260,7 @@ def main():
                             cols = st.columns(2)
                             for i, img in enumerate(all_generated_images):
                                 with cols[i % 2]:
-                                    st.image(img["data"], caption=img["name"], use_column_width=True)
+                                    st.image(img["data"], caption=img["name"], use_container_width=True)
                         else:
                             st.error("No images were generated. Please check your uploads and selections.")
             except Exception as e:
