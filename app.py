@@ -1,6 +1,6 @@
 # app.py
 # This script creates a Streamlit web application to automate the generation of athlete profile images.
-# This version features improved cropping logic and a more visible guideline overlay.
+# This version features improved cropping logic to prevent distortion and a more visible guideline overlay.
 
 import streamlit as st
 from PIL import Image, ImageDraw
@@ -26,82 +26,67 @@ OUTPUT_SPECS = {
     }
 }
 
-# --- Core Image Processing Logic (Simulated) ---
+# --- Core Image Processing Logic ---
 
-def simulate_avatar_crop(image):
+def crop_to_aspect_ratio(image, target_width, target_height):
     """
-    Simulates a head-and-shoulders crop for an avatar,
-    focusing on the top center of the image.
-    """
-    img_width, img_height = image.size
-    
-    # Calculate crop box for a head-and-shoulders shot
-    # This is a heuristic and would be replaced by a real face detection model
-    crop_width = int(img_width * 0.8) # Crop to 80% of the image width
-    crop_height = int(img_height * 0.6) # Crop to 60% of the image height, from the top
-    
-    left = (img_width - crop_width) / 2
-    top = 0
-    right = left + crop_width
-    bottom = top + crop_height
-    
-    return image.crop((left, top, right, bottom))
-
-def simulate_hero_crop(image, target_width, target_height):
-    """
-    Simulates a hero crop, focusing on a wider shot with a specific aspect ratio.
+    Crops the image to match the target aspect ratio without distortion.
+    This function prioritizes the top-center of the image for better subject framing.
     """
     img_width, img_height = image.size
     target_aspect = target_width / target_height
     image_aspect = img_width / img_height
-
-    # If the image is wider than the target aspect ratio, crop the sides.
+    
     if image_aspect > target_aspect:
+        # Image is wider than target. Crop the sides to fit.
         new_width = int(img_height * target_aspect)
         left = (img_width - new_width) / 2
+        top = 0
         right = left + new_width
-        top = 0
         bottom = img_height
-        cropped_image = image.crop((left, top, right, bottom))
-    # If the image is taller than the target aspect ratio, crop the bottom.
     elif image_aspect < target_aspect:
+        # Image is taller than target. Crop from the bottom to fit.
         new_height = int(img_width / target_aspect)
-        top = 0
-        bottom = new_height
         left = 0
+        top = 0
         right = img_width
-        cropped_image = image.crop((left, top, right, bottom))
+        bottom = new_height
     else:
-        cropped_image = image
+        # Aspect ratios match perfectly.
+        left, top, right, bottom = 0, 0, img_width, img_height
+        
+    return image.crop((left, top, right, bottom))
 
-    return cropped_image
 
 def create_guideline_image(width, height):
-    """Generates a transparent guideline image with a dashed border."""
+    """Generates a transparent guideline image with a more visible dashed border."""
     guideline = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(guideline)
-    # Draw a thicker, white dashed border for visibility
-    for i in range(0, width, 20):
-        draw.line((i, 0, i+10, 0), fill=(255, 255, 255, 255), width=3)
-        draw.line((i, height-1, i+10, height-1), fill=(255, 255, 255, 255), width=3)
-    for i in range(0, height, 20):
-        draw.line((0, i, 0, i+10), fill=(255, 255, 255, 255), width=3)
-        draw.line((width-1, i, width-1, i+10), fill=(255, 255, 255, 255), width=3)
+    # Draw a thicker, more visible white dashed border
+    line_color = (255, 255, 255, 200) # Semi-transparent white
+    line_width = 3
+    dash_length = 15
+    for i in range(0, width, dash_length * 2):
+        draw.line((i, 0, i + dash_length, 0), fill=line_color, width=line_width)
+        draw.line((i, height-1, i + dash_length, height-1), fill=line_color, width=line_width)
+    for i in range(0, height, dash_length * 2):
+        draw.line((0, i, 0, i + dash_length), fill=line_color, width=line_width)
+        draw.line((width-1, i, width-1, i + dash_length), fill=line_color, width=line_width)
     return guideline
 
 def create_hero_guideline_image(width, height):
     """Generates a guideline for hero images with a centered horizontal line."""
     guideline = create_guideline_image(width, height)
     draw = ImageDraw.Draw(guideline)
-    # Add a prominent horizontal line for the shoulders based on reference
+    # Add a more prominent horizontal line for the shoulders based on reference
     shoulder_height = int(height * 0.4) 
     draw.line((0, shoulder_height, width, shoulder_height), fill=(255, 255, 255, 200), width=5)
     return guideline
 
 def process_image(uploaded_file, size_spec, add_guideline=False):
     """
-    Processes a single uploaded image file to a single specified size.
-    An optional guideline can be added for preview purposes.
+    Processes a single uploaded image file to a single specified size,
+    maintaining aspect ratio and optionally adding a guideline overlay.
     """
     try:
         # Open the image using Pillow (PIL)
@@ -112,11 +97,8 @@ def process_image(uploaded_file, size_spec, add_guideline=False):
         width = size_spec["width"]
         height = size_spec["height"]
         
-        # Select the correct cropping function based on the type
-        if size_spec["type"] == "avatar":
-            cropped_image = simulate_avatar_crop(image)
-        else: # "hero"
-            cropped_image = simulate_hero_crop(image, width, height)
+        # Crop the image to match the target aspect ratio without distortion
+        cropped_image = crop_to_aspect_ratio(image, width, height)
 
         # Resize the cropped image to the final dimensions
         processed_image = cropped_image.resize((width, height), Image.LANCZOS)
@@ -139,7 +121,7 @@ def process_image(uploaded_file, size_spec, add_guideline=False):
         bg.save(buffer, format="PNG")
         buffer.seek(0)
         
-        return {"name": filename, "data": buffer, "guideline_data": None}
+        return {"name": filename, "data": buffer}
 
     except Exception as e:
         st.error(f"Error processing {uploaded_file.name} for size {width}x{height}: {e}")
