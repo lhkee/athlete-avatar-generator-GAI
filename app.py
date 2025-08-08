@@ -28,33 +28,29 @@ OUTPUT_SPECS = {
 
 # --- Core Image Processing Logic ---
 
-def crop_to_aspect_ratio(image, target_width, target_height):
+def crop_to_aspect_ratio_tighter(image, target_aspect):
     """
-    Crops the image to match the target aspect ratio without distortion.
-    This function prioritizes the top-center of the image for better subject framing.
+    Crops the image to a target aspect ratio with a tighter, top-focused frame
+    for head-and-shoulders shots without distortion.
     """
     img_width, img_height = image.size
-    target_aspect = target_width / target_height
-    image_aspect = img_width / img_height
     
-    if image_aspect > target_aspect:
-        # Image is wider than target. Crop the sides to fit.
+    # Calculate the new crop dimensions based on the target aspect ratio
+    if img_width / img_height > target_aspect:
+        # If the original image is wider, the new crop width is based on height.
         new_width = int(img_height * target_aspect)
-        left = (img_width - new_width) / 2
-        top = 0
-        right = left + new_width
-        bottom = img_height
-    elif image_aspect < target_aspect:
-        # Image is taller than target. Crop from the bottom to fit.
-        new_height = int(img_width / target_aspect)
-        left = 0
-        top = 0
-        right = img_width
-        bottom = new_height
+        new_height = img_height
     else:
-        # Aspect ratios match perfectly.
-        left, top, right, bottom = 0, 0, img_width, img_height
+        # If the original image is taller, the new crop height is based on width.
+        new_width = img_width
+        new_height = int(img_width / target_aspect)
         
+    # Center the crop horizontally but keep the top of the image (head)
+    left = (img_width - new_width) / 2
+    top = 0
+    right = left + new_width
+    bottom = top + new_height
+    
     return image.crop((left, top, right, bottom))
 
 
@@ -62,10 +58,10 @@ def create_guideline_image(width, height):
     """Generates a transparent guideline image with a more visible dashed border."""
     guideline = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(guideline)
-    # Draw a thicker, more visible white dashed border
-    line_color = (255, 255, 255, 200) # Semi-transparent white
-    line_width = 3
-    dash_length = 15
+    # Draw a thicker, more visible yellow dashed border
+    line_color = (255, 255, 0, 200) # Semi-transparent yellow for visibility
+    line_width = 4
+    dash_length = 20
     for i in range(0, width, dash_length * 2):
         draw.line((i, 0, i + dash_length, 0), fill=line_color, width=line_width)
         draw.line((i, height-1, i + dash_length, height-1), fill=line_color, width=line_width)
@@ -80,7 +76,7 @@ def create_hero_guideline_image(width, height):
     draw = ImageDraw.Draw(guideline)
     # Add a more prominent horizontal line for the shoulders based on reference
     shoulder_height = int(height * 0.4) 
-    draw.line((0, shoulder_height, width, shoulder_height), fill=(255, 255, 255, 200), width=5)
+    draw.line((0, shoulder_height, width, shoulder_height), fill=(255, 255, 0, 200), width=6)
     return guideline
 
 def process_image(uploaded_file, size_spec, add_guideline=False):
@@ -97,8 +93,11 @@ def process_image(uploaded_file, size_spec, add_guideline=False):
         width = size_spec["width"]
         height = size_spec["height"]
         
+        # Calculate target aspect ratio
+        target_aspect = width / height
+
         # Crop the image to match the target aspect ratio without distortion
-        cropped_image = crop_to_aspect_ratio(image, width, height)
+        cropped_image = crop_to_aspect_ratio_tighter(image, target_aspect)
 
         # Resize the cropped image to the final dimensions
         processed_image = cropped_image.resize((width, height), Image.LANCZOS)
@@ -148,24 +147,13 @@ def main():
     st.markdown("---")
 
     st.subheader("1. Upload Images")
-    st.write("Drag and drop front and side profile images below.")
+    st.write("Drag and drop your athlete images below. You can upload multiple files at once.")
 
-    col1, col2 = st.columns(2)
-
-    front_profile_file = None
-    side_profile_file = None
-    with col1:
-        front_profile_file = st.file_uploader(
-            "Upload Front Profile Image",
-            type=["tif", "tiff", "jpg", "jpeg", "png"],
-            key="front_profile"
-        )
-    with col2:
-        side_profile_file = st.file_uploader(
-            "Upload Side Profile Image",
-            type=["tif", "tiff", "jpg", "jpeg", "png"],
-            key="side_profile"
-        )
+    uploaded_files = st.file_uploader(
+        "Upload Images",
+        type=["tif", "tiff", "jpg", "jpeg", "png"],
+        accept_multiple_files=True
+    )
     
     st.markdown("---")
 
@@ -190,7 +178,7 @@ def main():
     st.checkbox("Show guideline overlay on previews", key="show_guideline")
 
     if st.button("Generate Images", type="primary", use_container_width=True):
-        if not front_profile_file and not side_profile_file:
+        if not uploaded_files:
             st.warning("Please upload at least one image to begin.")
         else:
             try:
@@ -209,7 +197,6 @@ def main():
                 else:
                     with st.spinner("Processing images..."):
                         all_generated_images = []
-                        uploaded_files = [file for file in [front_profile_file, side_profile_file] if file is not None]
                         
                         show_guideline = st.session_state.get("show_guideline", False)
                         
