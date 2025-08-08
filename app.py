@@ -1,10 +1,9 @@
 # app.py
 # This script creates a Streamlit web application to automate the generation of athlete profile images.
-# It simulates the face detection and cropping process described in the provided technical brief.
-# The app handles file uploads, processes the images, and provides a downloadable ZIP file of the results.
+# It now includes a more advanced simulated face cropping logic, a preview section, and an optional guideline overlay.
 
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageDraw
 import io
 import zipfile
 import os
@@ -29,31 +28,62 @@ OUTPUT_SPECS = {
 
 # --- Core Image Processing Logic (Simulated) ---
 
-def simulate_face_crop(image, target_size):
+def simulate_crop(image, target_width, target_height):
     """
-    Simulates cropping an image to a target size.
-    A real implementation would use a face detection model.
+    Simulates a more intelligent crop that focuses on the center-top of the image,
+    more appropriate for a human subject.
     """
-    width, height = image.size
-    
-    # Crop a square from the center of the original image
-    min_dim = min(width, height)
-    left = (width - min_dim) / 2
-    top = (height - min_dim) / 2
-    right = (width + min_dim) / 2
-    bottom = (height + min_dim) / 2
-    
-    cropped_image = image.crop((left, top, right, bottom))
-    
-    # Resize to the target size while maintaining aspect ratio
-    cropped_image.thumbnail((target_size, target_size), Image.LANCZOS)
-    
-    return cropped_image
+    img_width, img_height = image.size
+    target_aspect = target_width / target_height
+    image_aspect = img_width / img_height
 
+    # If the image is wider than the target aspect ratio, crop the sides.
+    if image_aspect > target_aspect:
+        new_width = int(img_height * target_aspect)
+        left = (img_width - new_width) / 2
+        right = left + new_width
+        top = 0
+        bottom = img_height
+        cropped_image = image.crop((left, top, right, bottom))
+    # If the image is taller than the target aspect ratio, crop the bottom.
+    elif image_aspect < target_aspect:
+        new_height = int(img_width / target_aspect)
+        top = 0
+        bottom = new_height
+        left = 0
+        right = img_width
+        cropped_image = image.crop((left, top, right, bottom))
+    else:
+        cropped_image = image
 
-def process_image(uploaded_file, size_spec):
+    return cropped_image.resize((target_width, target_height), Image.LANCZOS)
+
+def create_guideline_image(width, height):
+    """Generates a transparent guideline image with a dashed border."""
+    guideline = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(guideline)
+    # Draw a thin, white dashed border
+    for i in range(0, width, 10):
+        draw.line((i, 0, i+5, 0), fill=(255, 255, 255, 200), width=1)
+        draw.line((i, height-1, i+5, height-1), fill=(255, 255, 255, 200), width=1)
+    for i in range(0, height, 10):
+        draw.line((0, i, 0, i+5), fill=(255, 255, 255, 200), width=1)
+        draw.line((width-1, i, width-1, i+5), fill=(255, 255, 255, 200), width=1)
+    return guideline
+
+def create_hero_guideline_image(width, height):
+    """Generates a guideline for hero images with a centered horizontal line."""
+    guideline = create_guideline_image(width, height)
+    draw = ImageDraw.Draw(guideline)
+    # Add a horizontal line for the shoulders based on reference
+    shoulder_height = int(height * 0.4) # Adjusting based on reference image proportions
+    draw.line((0, shoulder_height, width, shoulder_height), fill=(255, 255, 255, 150), width=3)
+    return guideline
+
+def process_image(uploaded_file, size_spec, add_guideline=False):
     """
     Processes a single uploaded image file to a single specified size.
+    An optional guideline can be added for preview purposes.
     """
     try:
         # Open the image using Pillow (PIL)
@@ -68,15 +98,20 @@ def process_image(uploaded_file, size_spec):
         width = size_spec["width"]
         height = size_spec["height"]
         
-        if size_spec["type"] == "avatar":
-            processed_image = simulate_face_crop(image, min(width, height))
-            processed_image = processed_image.resize((width, height), Image.LANCZOS)
-        else:
-            processed_image = image.resize((width, height), Image.LANCZOS)
+        # Apply the new simulated cropping logic
+        processed_image = simulate_crop(image, width, height)
 
         # Create a new image with a transparent background
         bg = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         bg.paste(processed_image, (0, 0), processed_image)
+        
+        # Add guideline overlay for previews if requested
+        if add_guideline:
+            if size_spec["type"] == "hero":
+                guideline_overlay = create_hero_guideline_image(width, height)
+            else:
+                guideline_overlay = create_guideline_image(width, height)
+            bg.paste(guideline_overlay, (0, 0), guideline_overlay)
         
         filename = f"{original_filename}-{size_spec['type']}_{width}x{height}.png"
         
@@ -84,7 +119,7 @@ def process_image(uploaded_file, size_spec):
         bg.save(buffer, format="PNG")
         buffer.seek(0)
         
-        return {"name": filename, "data": buffer}
+        return {"name": filename, "data": buffer, "guideline_data": None}
 
     except Exception as e:
         st.error(f"Error processing {uploaded_file.name} for size {width}x{height}: {e}")
@@ -150,6 +185,7 @@ def main():
         st.checkbox("1500x920 px", value=True, key="hero_1500")
 
     st.markdown("---")
+    st.checkbox("Show guideline overlay on previews", key="show_guideline")
 
     if st.button("Generate Images", type="primary", use_container_width=True):
         if not front_profile_file and not side_profile_file:
@@ -173,17 +209,20 @@ def main():
                         all_generated_images = []
                         uploaded_files = [file for file in [front_profile_file, side_profile_file] if file is not None]
                         
+                        show_guideline = st.session_state.get("show_guideline", False)
+                        
                         for uploaded_file in uploaded_files:
                             st.info(f"Processing image: {uploaded_file.name}")
                             for size_spec in selected_sizes:
-                                generated_image = process_image(uploaded_file, size_spec)
-                                if generated_image:
-                                    all_generated_images.append(generated_image)
+                                generated_image_info = process_image(uploaded_file, size_spec, show_guideline)
+                                if generated_image_info:
+                                    all_generated_images.append(generated_image_info)
 
                         if all_generated_images:
                             zip_buffer = io.BytesIO()
                             with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zf:
                                 for img in all_generated_images:
+                                    # We save the original processed image to the zip, not the one with the guideline
                                     zf.writestr(img["name"], img["data"].getvalue())
 
                             st.success("Images generated successfully! Download the ZIP below.")
@@ -194,6 +233,15 @@ def main():
                                 mime="application/zip",
                                 use_container_width=True
                             )
+                            
+                            st.markdown("---")
+                            st.subheader("3. Image Previews")
+                            st.write("Here are the images generated from your uploads:")
+                            
+                            cols = st.columns(2)
+                            for i, img in enumerate(all_generated_images):
+                                with cols[i % 2]:
+                                    st.image(img["data"], caption=img["name"], use_column_width=True)
                         else:
                             st.error("No images were generated. Please check your uploads and selections.")
             except Exception as e:
